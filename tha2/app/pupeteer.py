@@ -21,118 +21,6 @@ from puppet.head_pose_solver import HeadPoseSolver
 from puppet.util import compute_left_eye_normalized_ratio, compute_right_eye_normalized_ratio, \
     compute_mouth_normalized_ratio
 
-class MorphCategoryControlPanel(wx.Panel):
-    def __init__(self,
-                 parent,
-                 title: str,
-                 pose_param_category: PoseParameterCategory,
-                 param_groups: List[PoseParameterGroup]):
-        super().__init__(parent, style=wx.SIMPLE_BORDER)
-        self.pose_param_category = pose_param_category
-        self.sizer = wx.BoxSizer(wx.VERTICAL)
-        self.SetSizer(self.sizer)
-        self.SetAutoLayout(1)
-
-        title_text = wx.StaticText(self, label=title, style=wx.ALIGN_CENTER)
-        self.sizer.Add(title_text, 0, wx.EXPAND)
-
-        self.param_groups = [group for group in param_groups if group.get_category() == pose_param_category]
-        self.choice = wx.Choice(self, choices=[group.get_group_name() for group in self.param_groups])
-        if len(self.param_groups) > 0:
-            self.choice.SetSelection(0)
-        self.choice.Bind(wx.EVT_CHOICE, self.on_choice_updated)
-        self.sizer.Add(self.choice, 0, wx.EXPAND)
-
-        self.left_slider = wx.Slider(self, minValue=-1000, maxValue=1000, value=-1000, style=wx.HORIZONTAL)
-        self.sizer.Add(self.left_slider, 0, wx.EXPAND)
-
-        self.right_slider = wx.Slider(self, minValue=-1000, maxValue=1000, value=-1000, style=wx.HORIZONTAL)
-        self.sizer.Add(self.right_slider, 0, wx.EXPAND)
-
-        self.checkbox = wx.CheckBox(self, label="Show")
-        self.checkbox.SetValue(True)
-        self.sizer.Add(self.checkbox, 0, wx.SHAPED | wx.ALIGN_CENTER)
-
-        self.update_ui()
-
-        self.sizer.Fit(self)
-
-    def update_ui(self):
-        param_group = self.param_groups[self.choice.GetSelection()]
-        if param_group.is_discrete():
-            self.left_slider.Enable(False)
-            self.right_slider.Enable(False)
-            self.checkbox.Enable(True)
-        elif param_group.get_arity() == 1:
-            self.left_slider.Enable(True)
-            self.right_slider.Enable(False)
-            self.checkbox.Enable(False)
-        else:
-            self.left_slider.Enable(True)
-            self.right_slider.Enable(True)
-            self.checkbox.Enable(False)
-
-    def on_choice_updated(self, event: wx.Event):
-        param_group = self.param_groups[self.choice.GetSelection()]
-        if param_group.is_discrete():
-            self.checkbox.SetValue(True)
-        self.update_ui()
-
-    def set_param_value(self, pose: List[float]):
-        if len(self.param_groups) == 0:
-            return
-        selected_morph_index = self.choice.GetSelection()
-        param_group = self.param_groups[selected_morph_index]
-        param_index = param_group.get_parameter_index()
-        if param_group.is_discrete():
-            if self.checkbox.GetValue():
-                for i in range(param_group.get_arity()):
-                    pose[param_index + i] = 1.0
-        else:
-            param_range = param_group.get_range()
-            alpha = (self.left_slider.GetValue() + 1000) / 2000.0
-            pose[param_index] = param_range[0] + (param_range[1] - param_range[0]) * alpha
-            if param_group.get_arity() == 2:
-                alpha = (self.right_slider.GetValue() + 1000) / 2000.0
-                pose[param_index + 1] = param_range[0] + (param_range[1] - param_range[0]) * alpha
-
-
-class RotationControlPanel(wx.Panel):
-    def __init__(self, parent,
-                 pose_param_category: PoseParameterCategory,
-                 param_groups: List[PoseParameterGroup]):
-        super().__init__(parent, style=wx.SIMPLE_BORDER)
-        self.sizer = wx.BoxSizer(wx.VERTICAL)
-        self.SetSizer(self.sizer)
-        self.SetAutoLayout(1)
-
-        self.param_groups = [group for group in param_groups if group.get_category() == pose_param_category]
-        for param_group in self.param_groups:
-            assert not param_group.is_discrete()
-            assert param_group.get_arity() == 1
-
-        self.sliders = []
-        for param_group in self.param_groups:
-            static_text = wx.StaticText(self, label="--- %s ---" % param_group.get_group_name(), style=wx.ALIGN_CENTER)
-            self.sizer.Add(static_text, 0, wx.EXPAND)
-            slider = wx.Slider(self, minValue=-1000, maxValue=1000, value=0, style=wx.HORIZONTAL)
-            self.sizer.Add(slider, 0, wx.EXPAND)
-            self.sliders.append(slider)
-
-        self.sizer.Fit(self)
-
-    def set_param_value(self, pose: List[float]):
-        if len(self.param_groups) == 0:
-            return
-        for param_group_index in range(len(self.param_groups)):
-            param_group = self.param_groups[param_group_index]
-            slider = self.sliders[param_group_index]
-            param_range = param_group.get_range()
-            param_index = param_group.get_parameter_index()
-            alpha = (slider.GetValue() + 1000) / 2000.0
-            pose[param_index] = param_range[0] + (param_range[1] - param_range[0]) * alpha
-
-
 class MainFrame(wx.Frame):
     def __init__(self, poser: Poser,
                  face_detector,
@@ -171,8 +59,6 @@ class MainFrame(wx.Frame):
         ])
         self.SetAcceleratorTable(accelerator_table)
 
-        # self.pose_size = 6  # face_detector can detect only 6 poses
-
         self.last_pose = None
         self.detected_last_pose = None
         self.detected_pose = None
@@ -193,9 +79,6 @@ class MainFrame(wx.Frame):
         left_panel_sizer.Add(self.load_image_button, 1, wx.EXPAND)
         self.load_image_button.Bind(wx.EVT_BUTTON, self.load_image)
 
-        # self.source_video_panel = wx.Panel(self.left_panel, size=(256, 256), style=wx.SIMPLE_BORDER)
-        # left_panel_sizer.Add(self.source_video_panel, 0, wx.FIXED_MINSIZE)
-
         left_panel_sizer.Fit(self.left_panel)
         self.main_sizer.Add(self.left_panel, 0, wx.FIXED_MINSIZE)
 
@@ -208,55 +91,6 @@ class MainFrame(wx.Frame):
         self.control_panel_sizer.Fit(self.left_panel)
         self.main_sizer.Add(self.control_panel, 0, wx.FIXED_MINSIZE)
 
-        # self.control_panel_sizer = wx.BoxSizer(wx.VERTICAL)
-        # self.control_panel.SetSizer(self.control_panel_sizer)
-
-
-        # morph_categories = [
-        #     PoseParameterCategory.EYEBROW,
-        #     PoseParameterCategory.EYE,
-        #     PoseParameterCategory.MOUTH,
-        #     PoseParameterCategory.IRIS_MORPH
-        # ]
-        # morph_category_titles = {
-        #     PoseParameterCategory.EYEBROW: "--- Eyebrow ---",
-        #     PoseParameterCategory.EYE: "--- Eye ---",
-        #     PoseParameterCategory.MOUTH: "--- Mouth ---",
-        #     PoseParameterCategory.IRIS_MORPH: "--- Iris morphs ---",
-        # }
-        # self.morph_control_panels = {}
-        # for category in morph_categories:
-        #     param_groups = self.poser.get_pose_parameter_groups()
-        #     filtered_param_groups = [group for group in param_groups if group.get_category() == category]
-        #     if len(filtered_param_groups) == 0:
-        #         continue
-        #     control_panel = MorphCategoryControlPanel(
-        #         self.control_panel,
-        #         morph_category_titles[category],
-        #         category,
-        #         self.poser.get_pose_parameter_groups())
-        #     self.morph_control_panels[category] = control_panel
-        #     self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
-
-        # self.rotation_control_panels = {}
-        # rotation_categories = [
-        #     PoseParameterCategory.IRIS_ROTATION,
-        #     PoseParameterCategory.FACE_ROTATION
-        # ]
-        # for category in rotation_categories:
-        #     param_groups = self.poser.get_pose_parameter_groups()
-        #     filtered_param_groups = [group for group in param_groups if group.get_category() == category]
-        #     if len(filtered_param_groups) == 0:
-        #         continue
-        #     control_panel = RotationControlPanel(
-        #         self.control_panel,
-        #         category,
-        #         self.poser.get_pose_parameter_groups())
-        #     self.rotation_control_panels[category] = control_panel
-        #     self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
-
-        # self.control_panel_sizer.Fit(self.control_panel)
-        # self.main_sizer.Add(self.control_panel, 1, wx.EXPAND)
 
     def init_right_panel(self):
         self.right_panel = wx.Panel(self, style=wx.SIMPLE_BORDER)
@@ -280,16 +114,6 @@ class MainFrame(wx.Frame):
         right_panel_sizer.Fit(self.right_panel)
         self.main_sizer.Add(self.right_panel, 0, wx.FIXED_MINSIZE)
 
-    def create_param_category_choice(self, param_category: PoseParameterCategory):
-        params = []
-        for param_group in self.poser.get_pose_parameter_groups():
-            if param_group.get_category() == param_category:
-                params.append(param_group.get_group_name())
-        choice = wx.Choice(self.control_panel, choices=params)
-        if len(params) > 0:
-            choice.SetSelection(0)
-        return choice
-
     def load_image(self, event: wx.Event):
         dir_name = "data/illust"
         file_dialog = wx.FileDialog(self, "Choose an image", dir_name, "", "*.png", wx.FD_OPEN)
@@ -304,9 +128,6 @@ class MainFrame(wx.Frame):
             else:
                 self.wx_source_image = wx.Bitmap.FromBufferRGBA(w, h, pil_image.convert("RGBA").tobytes())
                 self.torch_source_image = extract_pytorch_image_from_PIL_image(pil_image).to(self.device)
-                # dc = wx.PaintDC(self.source_image_panel)
-                # dc.Clear()
-                # dc.DrawBitmap(self.wx_source_image, 0, 0, True)
 
             self.Refresh()
         file_dialog.Destroy()
@@ -335,13 +156,6 @@ class MainFrame(wx.Frame):
 
     def get_current_pose(self):
         current_pose = [0.0 for i in range(self.poser.get_num_parameters())]
-        # for morph_control_panel in self.morph_control_panels.values():
-        #     # print("morph_control_panel ", morph_control_panel)
-        #     morph_control_panel.set_param_value(current_pose)
-        #     # print(current_pose)
-        # for rotation_control_panel in self.rotation_control_panels.values():
-        #     # print("rotation_control_panel", rotation_control_panel)
-        #     rotation_control_panel.set_param_value(current_pose)
 
         if self.detected_pose is not None:
             current_pose[12] = self.detected_pose[4]  # right eye
