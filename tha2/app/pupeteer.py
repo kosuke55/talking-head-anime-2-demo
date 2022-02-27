@@ -1,4 +1,6 @@
+from importlib.resources import is_resource
 import logging
+from multiprocessing.dummy import current_process
 import os
 import sys
 from typing import List
@@ -16,6 +18,8 @@ from tha2.poser.poser import Poser, PoseParameterCategory, PoseParameterGroup
 from tha2.util import extract_PIL_image_from_filelike, resize_PIL_image, extract_pytorch_image_from_PIL_image, convert_output_image_from_torch_to_numpy, cv2pil
 
 from puppet.head_pose_solver import HeadPoseSolver
+from puppet.util import compute_left_eye_normalized_ratio, compute_right_eye_normalized_ratio, \
+    compute_mouth_normalized_ratio
 
 class MorphCategoryControlPanel(wx.Panel):
     def __init__(self,
@@ -167,12 +171,15 @@ class MainFrame(wx.Frame):
         ])
         self.SetAcceleratorTable(accelerator_table)
 
+        # self.pose_size = 6  # face_detector can detect only 6 poses
+
         self.last_pose = None
+        self.detected_last_pose = None
+        self.detected_pose = None
         self.last_output_index = self.output_index_choice.GetSelection()
         self.last_output_numpy_image = None
 
     def init_left_panel(self):
-        self.control_panel = wx.Panel(self, style=wx.SIMPLE_BORDER, size=(256, -1))
         self.left_panel = wx.Panel(self, style=wx.SIMPLE_BORDER)
         left_panel_sizer = wx.BoxSizer(wx.VERTICAL)
         self.left_panel.SetSizer(left_panel_sizer)
@@ -186,63 +193,70 @@ class MainFrame(wx.Frame):
         left_panel_sizer.Add(self.load_image_button, 1, wx.EXPAND)
         self.load_image_button.Bind(wx.EVT_BUTTON, self.load_image)
 
-        self.source_video_panel = wx.Panel(
-            self.left_panel, size=(
-                256, 256), style=wx.SIMPLE_BORDER)
-        left_panel_sizer.Add(self.source_video_panel, 0, wx.FIXED_MINSIZE)
+        # self.source_video_panel = wx.Panel(self.left_panel, size=(256, 256), style=wx.SIMPLE_BORDER)
+        # left_panel_sizer.Add(self.source_video_panel, 0, wx.FIXED_MINSIZE)
 
         left_panel_sizer.Fit(self.left_panel)
         self.main_sizer.Add(self.left_panel, 0, wx.FIXED_MINSIZE)
 
     def init_control_panel(self):
+        self.control_panel = wx.Panel(self, style=wx.SIMPLE_BORDER, size=(256, 256))
         self.control_panel_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.control_panel.SetSizer(self.control_panel_sizer)
+        self.source_video_panel = wx.Panel(self.control_panel, size=(256, 256), style=wx.SIMPLE_BORDER)
+        self.control_panel_sizer.Add(self.source_video_panel, 0, wx.FIXED_MINSIZE)
+        self.control_panel.SetAutoLayout(1)
+        self.control_panel_sizer.Fit(self.left_panel)
+        self.main_sizer.Add(self.control_panel, 0, wx.FIXED_MINSIZE)
 
-        morph_categories = [
-            PoseParameterCategory.EYEBROW,
-            PoseParameterCategory.EYE,
-            PoseParameterCategory.MOUTH,
-            PoseParameterCategory.IRIS_MORPH
-        ]
-        morph_category_titles = {
-            PoseParameterCategory.EYEBROW: "--- Eyebrow ---",
-            PoseParameterCategory.EYE: "--- Eye ---",
-            PoseParameterCategory.MOUTH: "--- Mouth ---",
-            PoseParameterCategory.IRIS_MORPH: "--- Iris morphs ---",
-        }
-        self.morph_control_panels = {}
-        for category in morph_categories:
-            param_groups = self.poser.get_pose_parameter_groups()
-            filtered_param_groups = [group for group in param_groups if group.get_category() == category]
-            if len(filtered_param_groups) == 0:
-                continue
-            control_panel = MorphCategoryControlPanel(
-                self.control_panel,
-                morph_category_titles[category],
-                category,
-                self.poser.get_pose_parameter_groups())
-            self.morph_control_panels[category] = control_panel
-            self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
+        # self.control_panel_sizer = wx.BoxSizer(wx.VERTICAL)
+        # self.control_panel.SetSizer(self.control_panel_sizer)
 
-        self.rotation_control_panels = {}
-        rotation_categories = [
-            PoseParameterCategory.IRIS_ROTATION,
-            PoseParameterCategory.FACE_ROTATION
-        ]
-        for category in rotation_categories:
-            param_groups = self.poser.get_pose_parameter_groups()
-            filtered_param_groups = [group for group in param_groups if group.get_category() == category]
-            if len(filtered_param_groups) == 0:
-                continue
-            control_panel = RotationControlPanel(
-                self.control_panel,
-                category,
-                self.poser.get_pose_parameter_groups())
-            self.rotation_control_panels[category] = control_panel
-            self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
 
-        self.control_panel_sizer.Fit(self.control_panel)
-        self.main_sizer.Add(self.control_panel, 1, wx.EXPAND)
+        # morph_categories = [
+        #     PoseParameterCategory.EYEBROW,
+        #     PoseParameterCategory.EYE,
+        #     PoseParameterCategory.MOUTH,
+        #     PoseParameterCategory.IRIS_MORPH
+        # ]
+        # morph_category_titles = {
+        #     PoseParameterCategory.EYEBROW: "--- Eyebrow ---",
+        #     PoseParameterCategory.EYE: "--- Eye ---",
+        #     PoseParameterCategory.MOUTH: "--- Mouth ---",
+        #     PoseParameterCategory.IRIS_MORPH: "--- Iris morphs ---",
+        # }
+        # self.morph_control_panels = {}
+        # for category in morph_categories:
+        #     param_groups = self.poser.get_pose_parameter_groups()
+        #     filtered_param_groups = [group for group in param_groups if group.get_category() == category]
+        #     if len(filtered_param_groups) == 0:
+        #         continue
+        #     control_panel = MorphCategoryControlPanel(
+        #         self.control_panel,
+        #         morph_category_titles[category],
+        #         category,
+        #         self.poser.get_pose_parameter_groups())
+        #     self.morph_control_panels[category] = control_panel
+        #     self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
+
+        # self.rotation_control_panels = {}
+        # rotation_categories = [
+        #     PoseParameterCategory.IRIS_ROTATION,
+        #     PoseParameterCategory.FACE_ROTATION
+        # ]
+        # for category in rotation_categories:
+        #     param_groups = self.poser.get_pose_parameter_groups()
+        #     filtered_param_groups = [group for group in param_groups if group.get_category() == category]
+        #     if len(filtered_param_groups) == 0:
+        #         continue
+        #     control_panel = RotationControlPanel(
+        #         self.control_panel,
+        #         category,
+        #         self.poser.get_pose_parameter_groups())
+        #     self.rotation_control_panels[category] = control_panel
+        #     self.control_panel_sizer.Add(control_panel, 0, wx.EXPAND)
+
+        # self.control_panel_sizer.Fit(self.control_panel)
+        # self.main_sizer.Add(self.control_panel, 1, wx.EXPAND)
 
     def init_right_panel(self):
         self.right_panel = wx.Panel(self, style=wx.SIMPLE_BORDER)
@@ -290,6 +304,10 @@ class MainFrame(wx.Frame):
             else:
                 self.wx_source_image = wx.Bitmap.FromBufferRGBA(w, h, pil_image.convert("RGBA").tobytes())
                 self.torch_source_image = extract_pytorch_image_from_PIL_image(pil_image).to(self.device)
+                # dc = wx.PaintDC(self.source_image_panel)
+                # dc.Clear()
+                # dc.DrawBitmap(self.wx_source_image, 0, 0, True)
+
             self.Refresh()
         file_dialog.Destroy()
 
@@ -317,14 +335,30 @@ class MainFrame(wx.Frame):
 
     def get_current_pose(self):
         current_pose = [0.0 for i in range(self.poser.get_num_parameters())]
-        for morph_control_panel in self.morph_control_panels.values():
-            morph_control_panel.set_param_value(current_pose)
-        for rotation_control_panel in self.rotation_control_panels.values():
-            rotation_control_panel.set_param_value(current_pose)
+        # for morph_control_panel in self.morph_control_panels.values():
+        #     # print("morph_control_panel ", morph_control_panel)
+        #     morph_control_panel.set_param_value(current_pose)
+        #     # print(current_pose)
+        # for rotation_control_panel in self.rotation_control_panels.values():
+        #     # print("rotation_control_panel", rotation_control_panel)
+        #     rotation_control_panel.set_param_value(current_pose)
+
+        if self.detected_pose is not None:
+            current_pose[12] = self.detected_pose[4]  # right eye
+            current_pose[13] = self.detected_pose[3]  # left eye
+            current_pose[26] = self.detected_pose[5]
+            current_pose[39] = self.detected_pose[0]
+            current_pose[40] = self.detected_pose[1]
+            current_pose[41] = self.detected_pose[2]
+
+        for i in range(len(current_pose)):
+            print(i, current_pose[i])
+
         return current_pose
 
     def update_result_image_panel(self, event: wx.Event):
         _, frame = self.video_capture.read()
+        frame = cv2.flip(frame, 1)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         faces = self.face_detector(rgb_frame)
         euler_angles = None
@@ -337,10 +371,10 @@ class MainFrame(wx.Frame):
             self.draw_face_landmarks(rgb_frame, face_landmarks)
             self.draw_face_box(rgb_frame, face_box_points)
 
+        # visualize land mark and pose
         bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
         pil_image = resize_PIL_image(cv2pil(bgr_frame))
         pil_image.putalpha(255)
-
         w, h = pil_image.size
         if pil_image.mode != 'RGBA':
             frame = None
@@ -350,6 +384,34 @@ class MainFrame(wx.Frame):
             dc = wx.ClientDC(self.source_video_panel)
             dc.Clear()
             dc.DrawBitmap(frame, 0, 0, True)
+
+        if euler_angles is not None and self.wx_source_image is not None:
+            self.detected_pose = torch.zeros(6, device=self.device)
+            self.detected_pose[0] = max(min(-euler_angles.item(0) / 15.0, 1.0), -1.0)
+            self.detected_pose[1] = max(min(euler_angles.item(1) / 15.0, 1.0), -1.0)
+            self.detected_pose[2] = max(min(-euler_angles.item(2) / 15.0, 1.0), -1.0)
+
+            if self.detected_last_pose is None:
+                self.detected_last_pose = self.detected_pose
+            else:
+                self.detected_pose = self.detected_pose * 0.5 + self.detected_last_pose * 0.5
+                self.detected_last_pose = self.detected_pose
+
+            eye_min_ratio = 0.15
+            eye_max_ratio = 0.25
+            left_eye_normalized_ratio = compute_left_eye_normalized_ratio(face_landmarks, eye_min_ratio, eye_max_ratio)
+            self.detected_pose[3] = 1 - left_eye_normalized_ratio
+            right_eye_normalized_ratio = compute_right_eye_normalized_ratio(face_landmarks,
+                                                                            eye_min_ratio,
+                                                                            eye_max_ratio)
+            self.detected_pose[4] = 1 - right_eye_normalized_ratio
+
+            min_mouth_ratio = 0.02
+            max_mouth_ratio = 0.3
+            mouth_normalized_ratio = compute_mouth_normalized_ratio(face_landmarks, min_mouth_ratio, max_mouth_ratio)
+            self.detected_pose[5] = mouth_normalized_ratio
+
+            # self.detected_pose = self.detected_pose.unsqueeze(dim=0)
 
         current_pose = self.get_current_pose()
         if self.last_pose is not None \
@@ -443,5 +505,5 @@ if __name__ == "__main__":
     app = wx.App()
     main_frame = MainFrame(poser, face_detector, landmark_locator, video_capture, cuda)
     main_frame.Show(True)
-    main_frame.timer.Start(30)
+    main_frame.timer.Start(200)
     app.MainLoop()
