@@ -9,10 +9,13 @@ import numpy
 import torch
 import wx
 import PIL.Image
+import cv2
+import dlib
 
 from tha2.poser.poser import Poser, PoseParameterCategory, PoseParameterGroup
-from tha2.util import extract_PIL_image_from_filelike, resize_PIL_image, extract_pytorch_image_from_PIL_image, convert_output_image_from_torch_to_numpy
+from tha2.util import extract_PIL_image_from_filelike, resize_PIL_image, extract_pytorch_image_from_PIL_image, convert_output_image_from_torch_to_numpy, cv2pil
 
+from puppet.head_pose_solver import HeadPoseSolver
 
 class MorphCategoryControlPanel(wx.Panel):
     def __init__(self,
@@ -127,12 +130,22 @@ class RotationControlPanel(wx.Panel):
 
 
 class MainFrame(wx.Frame):
-    def __init__(self, poser: Poser, device: torch.device):
+    def __init__(self, poser: Poser,
+                 face_detector,
+                 landmark_locator,
+                 video_capture,
+                 device: torch.device):
         super().__init__(None, wx.ID_ANY, "Poser")
         self.poser = poser
+        self.face_detector = face_detector
+        self.landmark_locator = landmark_locator
+        self.video_capture = video_capture
         self.device = device
 
         self.wx_source_image = None
+        self.wx_source_video_frame = None
+        self.head_pose_solver = HeadPoseSolver()
+
         self.torch_source_image = None
         self.source_image_string = "Nothing yet!"
 
@@ -172,6 +185,11 @@ class MainFrame(wx.Frame):
         self.load_image_button = wx.Button(self.left_panel, wx.ID_ANY, "\nLoad Image\n\n")
         left_panel_sizer.Add(self.load_image_button, 1, wx.EXPAND)
         self.load_image_button.Bind(wx.EVT_BUTTON, self.load_image)
+
+        self.source_video_panel = wx.Panel(
+            self.left_panel, size=(
+                256, 256), style=wx.SIMPLE_BORDER)
+        left_panel_sizer.Add(self.source_video_panel, 0, wx.FIXED_MINSIZE)
 
         left_panel_sizer.Fit(self.left_panel)
         self.main_sizer.Add(self.left_panel, 0, wx.FIXED_MINSIZE)
@@ -306,6 +324,33 @@ class MainFrame(wx.Frame):
         return current_pose
 
     def update_result_image_panel(self, event: wx.Event):
+        _, frame = self.video_capture.read()
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        faces = self.face_detector(rgb_frame)
+        euler_angles = None
+        face_landmarks = None
+        if len(faces) > 0:
+            face_rect = faces[0]
+            face_landmarks = self.landmark_locator(rgb_frame, face_rect)
+            face_box_points, euler_angles = self.head_pose_solver.solve_head_pose(
+                face_landmarks)
+            self.draw_face_landmarks(rgb_frame, face_landmarks)
+            self.draw_face_box(rgb_frame, face_box_points)
+
+        bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+        pil_image = resize_PIL_image(cv2pil(bgr_frame))
+        pil_image.putalpha(255)
+
+        w, h = pil_image.size
+        if pil_image.mode != 'RGBA':
+            frame = None
+        else:
+            frame = wx.Bitmap.FromBufferRGBA(
+                w, h, pil_image.convert("RGBA").tobytes())
+            dc = wx.ClientDC(self.source_video_panel)
+            dc.Clear()
+            dc.DrawBitmap(frame, 0, 0, True)
+
         current_pose = self.get_current_pose()
         if self.last_pose is not None \
                 and self.last_pose == current_pose \
@@ -365,6 +410,23 @@ class MainFrame(wx.Frame):
         os.makedirs(os.path.dirname(image_file_name), exist_ok=True)
         pil_image.save(image_file_name)
 
+    def draw_face_box(self, frame, face_box_points):
+        line_pairs = [[0, 1], [1, 2], [2, 3], [3, 0],
+                      [4, 5], [5, 6], [6, 7], [7, 4],
+                      [0, 4], [1, 5], [2, 6], [3, 7]]
+        for start, end in line_pairs:
+            p0 = (int(face_box_points[start][0]), int(face_box_points[start][1]))
+            p1 = (int(face_box_points[end][0]), int(face_box_points[end][1]))
+            cv2.line(frame, p0, p1, (255, 0, 0), thickness=2)
+
+    def draw_face_landmarks(self, frame, face_landmarks):
+        for i in range(68):
+            part = face_landmarks.part(i)
+            x = int(part.x)
+            y = int(part.y)
+            cv2.rectangle(frame, (x - 1, y - 1), (x + 1, y + 1),
+                          (0, 255, 0), thickness=2)
+
 
 if __name__ == "__main__":
     cuda = torch.device('cuda')
@@ -372,8 +434,14 @@ if __name__ == "__main__":
 
     poser = tha2.poser.modes.mode_20.create_poser(cuda)
 
+    face_detector = dlib.get_frontal_face_detector()
+    landmark_locator = dlib.shape_predictor(
+        "data/shape_predictor_68_face_landmarks.dat")
+
+    video_capture = cv2.VideoCapture(0)
+
     app = wx.App()
-    main_frame = MainFrame(poser, cuda)
+    main_frame = MainFrame(poser, face_detector, landmark_locator, video_capture, cuda)
     main_frame.Show(True)
     main_frame.timer.Start(30)
     app.MainLoop()

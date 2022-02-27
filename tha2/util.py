@@ -2,6 +2,7 @@ import math
 import os
 from typing import List
 
+import cv2
 import PIL.Image
 import numpy
 import torch
@@ -194,6 +195,17 @@ def save_pytorch_image(image, file_name):
         pil_image = PIL.Image.fromarray(numpy.uint8(numpy.rint(numpy_image * 255.0)), mode='RGB')
     os.makedirs(os.path.dirname(file_name), exist_ok=True)
     pil_image.save(file_name)
+
+def cv2pil(image):
+    new_image = image.copy()
+    if new_image.ndim == 2:
+        pass
+    elif new_image.shape[2] == 3:
+        new_image = cv2.cvtColor(new_image, cv2.COLOR_BGR2RGB)
+    elif new_image.shape[2] == 4:
+        new_image = cv2.cvtColor(new_image, cv2.COLOR_BGRA2RGBA)
+    new_image = PIL.Image.fromarray(new_image)
+    return new_image
 
 
 def convert_output_image_from_torch_to_numpy(output_image):
